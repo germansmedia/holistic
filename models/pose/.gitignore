@@ -1,9 +1,3 @@
-/data0
-/data1
-/test0
-/test1
-*.h5
-
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
@@ -133,3 +127,5 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+
+*.h5

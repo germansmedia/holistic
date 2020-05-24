@@ -1,0 +1,14 @@
+[package]
+name = "facegen3"
+version = "0.1.0"
+authors = ["Desmond Germans <desmond@germansmedia.nl>"]
+edition = "2018"
+
+[target.x86_64-unknown-linux-gnu.dependencies]
+libc = "*"
+x11 = { version = "2.18.1", features = ["xlib", "glx"] }
+xcb = { version = "0.8", features = ["xlib_xcb", "dri2"] }
+gl = "*"
+rand = "*"
+
+[target.armv7-unknown-linux-gnueabihf.dependencies]

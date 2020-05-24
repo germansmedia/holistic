@@ -1,0 +1,7 @@
+'width': 256
+'height': 192
+'factor': 16
+'filters': 16
+'modules': 2
+'rate': 0.0001
+'batch_size': 8
