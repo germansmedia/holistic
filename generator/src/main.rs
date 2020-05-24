@@ -111,7 +111,7 @@ const EYE_SIZE: f32v3 = f32v3 { x: 0.0115,y: 0.0115,z: 0.0115, };
 
 fn render_random_background(rng: &mut rand::rngs::ThreadRng,ctx: &Context) {
     ctx.framebuffer.bind();
-    let block = 64usize;
+    /*let block = 64usize;
     unsafe { gl::Enable(gl::SCISSOR_TEST); }
     for y in 0..ctx.framebuffer.size.y / block {
         for x in 0..ctx.framebuffer.size.x / block {
@@ -128,7 +128,12 @@ fn render_random_background(rng: &mut rand::rngs::ThreadRng,ctx: &Context) {
             }
         }
     }
-    unsafe { gl::Disable(gl::SCISSOR_TEST); }
+    unsafe { gl::Disable(gl::SCISSOR_TEST); }*/
+    unsafe {
+        gl::ClearColor(0.0,0.0,0.0,1.0);
+        gl::ClearDepth(1.0);
+        gl::Clear(gl::COLOR_BUFFER_BIT | gl::DEPTH_BUFFER_BIT);
+    }
 }
 
 fn render_full(rng: &mut rand::rngs::ThreadRng,ctx: &Context,instance: &Instance) -> Image<ARGB8> {
