@@ -26,10 +26,10 @@ class ModelFSCAN():
         while cur < factor:
             a = layers.MaxPooling2D((2,2))(a)
             for i in range(0,modules):
-                a = layers.Conv2D(filters * cur,(3,3),activation='relu',padding='same')(a)
+                a = layers.Conv2D(filters,(3,3),activation='relu',padding='same')(a)
             cur *= 2
         for i in range(0,modules):
-            a = layers.Conv2D(filters * factor,(3,3),activation='relu',padding='same')(a)
+            a = layers.Conv2D(filters,(3,3),activation='relu',padding='same')(a)
         outputs = layers.Conv2D(1,(1,1),activation='sigmoid',padding='same')(a)
         self.model = Model(inputs=inputs,outputs=outputs)
         self.model.compile(

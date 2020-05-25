@@ -90,9 +90,9 @@ def make_model(params):
     cur = 1
     while cur < factor:
         a = reduction(a)
-        a = encoding(a,filters * cur,modules)
+        a = encoding(a,filters,modules)
         cur *= 2
-    a = encoding(a,filters * factor,modules)
+    a = encoding(a,filters,modules)
     outputs = layers.Conv2D(1,(1,1),activation='sigmoid',padding='same')(a)
 
     model = Model(inputs=inputs,outputs=outputs)

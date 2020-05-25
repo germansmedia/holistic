@@ -189,6 +189,17 @@ impl_vec2!(i64);
 impl_vec2_neg!(i64);
 
 #[allow(non_camel_case_types)]
+pub type usizev2 = Vec2<usize>;
+
+impl_vec2!(usize);
+
+#[allow(non_camel_case_types)]
+pub type isizev2 = Vec2<isize>;
+
+impl_vec2!(isize);
+impl_vec2_neg!(isize);
+
+#[allow(non_camel_case_types)]
 pub type f32v2 = Vec2<f32>;
 
 impl_vec2!(f32);
@@ -199,17 +210,6 @@ pub type f64v2 = Vec2<f64>;
 
 impl_vec2!(f64);
 impl_vec2_neg!(f64);
-
-#[allow(non_camel_case_types)]
-pub type usizev2 = Vec2<usize>;
-
-impl_vec2!(usize);
-
-#[allow(non_camel_case_types)]
-pub type isizev2 = Vec2<isize>;
-
-impl_vec2!(isize);
-impl_vec2_neg!(isize);
 
 #[derive(Copy,Clone)]
 pub struct Vec3<T> {

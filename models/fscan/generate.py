@@ -43,7 +43,7 @@ if __name__ == "__main__":
                     ey = ry - py
                     print('image {}: real {:5.3f},{:5.3f}, predicted {:5.3f},{:5.3f}, error {:5.3f},{:5.3f}'.format(i,rx,ry,px,py,ex,ey))
 
-                    # create 65x65 cutout of the found face
+                    # create cutout of the found face
                     image = np.zeros((129,129,3),np.float32)
                     for y in range(-64,65):
                         cy = int(py * factor + y)

@@ -71,6 +71,12 @@ impl<T: Pixel + GlPixelParams> Framebuffer<T> {
             image
         }
     }
+
+    pub fn set(&self,image: &Image<T>) {
+        unsafe {
+            gl::TexImage2D(gl::TEXTURE_2D,0,<T>::gl_internal_format() as GLint,image.size().x as GLint,image.size().y as GLint,0,<T>::gl_format(),<T>::gl_type(),image.data().as_ptr() as *const c_void);
+        }
+    }
 }
 
 impl<T> Drop for Framebuffer<T> {

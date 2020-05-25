@@ -36,6 +36,18 @@ impl One for f64 { fn one() -> f64 { 1.0 } }
 impl One for usize { fn one() -> usize { 1 } }
 impl One for isize { fn one() -> isize { 1 } }
 
+mod vector;
+pub use vector::*;
+
+mod matrix;
+pub use matrix::*;
+
+mod multivector;
+pub use multivector::*;
+
+mod rectangle;
+pub use rectangle::*;
+
 mod complex;
 pub use complex::*;
 
@@ -47,12 +59,3 @@ pub use euler::*;
 
 mod color;
 pub use color::*;
-
-mod vector;
-pub use vector::*;
-
-mod matrix;
-pub use matrix::*;
-
-mod multivector;
-pub use multivector::*;

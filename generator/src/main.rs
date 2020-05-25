@@ -4,6 +4,7 @@
 
 extern crate rand;
 use rand::Rng;
+use rand::seq::SliceRandom;
 
 use std::fs;
 use std::io::prelude::*;
@@ -109,34 +110,7 @@ const LEFT_EYE_POS: f32v3 = f32v3 { x: -0.031,y: 0.026,z: 0.023, };
 const RIGHT_EYE_POS: f32v3 = f32v3 { x: 0.031,y: 0.026,z: 0.023, };
 const EYE_SIZE: f32v3 = f32v3 { x: 0.0115,y: 0.0115,z: 0.0115, };
 
-fn render_random_background(rng: &mut rand::rngs::ThreadRng,ctx: &Context) {
-    ctx.framebuffer.bind();
-    /*let block = 64usize;
-    unsafe { gl::Enable(gl::SCISSOR_TEST); }
-    for y in 0..ctx.framebuffer.size.y / block {
-        for x in 0..ctx.framebuffer.size.x / block {
-            let color = f32k::new(
-                rng.gen::<f32>(),
-                rng.gen::<f32>(),
-                rng.gen::<f32>(),
-            );
-            unsafe {
-                gl::Scissor((x * block) as i32,(y * block) as i32,block as i32,block as i32);
-                gl::ClearColor(color.r,color.g,color.b,1.0);
-                gl::ClearDepth(1.0);
-                gl::Clear(gl::COLOR_BUFFER_BIT | gl::DEPTH_BUFFER_BIT);
-            }
-        }
-    }
-    unsafe { gl::Disable(gl::SCISSOR_TEST); }*/
-    unsafe {
-        gl::ClearColor(0.0,0.0,0.0,1.0);
-        gl::ClearDepth(1.0);
-        gl::Clear(gl::COLOR_BUFFER_BIT | gl::DEPTH_BUFFER_BIT);
-    }
-}
-
-fn render_full(rng: &mut rand::rngs::ThreadRng,ctx: &Context,instance: &Instance) -> Image<ARGB8> {
+fn render_full(rng: &mut rand::rngs::ThreadRng,ctx: &Context,backgrounds: &Vec<Image<ARGB8>>,instance: &Instance) -> Image<ARGB8> {
 
     let light_matrix = f32m3x3::yaw(instance.light.y) * f32m3x3::pitch(instance.light.p) * f32m3x3::roll(instance.light.b);
     let light_dir = light_matrix * f32v3::new(0.0,1.0,0.0);
@@ -144,7 +118,21 @@ fn render_full(rng: &mut rand::rngs::ThreadRng,ctx: &Context,instance: &Instance
     let left_eye_matrix = f32m4x4::translate(LEFT_EYE_POS) * f32m4x4::yaw(instance.left_eye.y) * f32m4x4::pitch(instance.left_eye.p) * f32m4x4::scale(EYE_SIZE);
     let right_eye_matrix = f32m4x4::translate(RIGHT_EYE_POS) * f32m4x4::yaw(instance.right_eye.y) * f32m4x4::pitch(instance.right_eye.p) * f32m4x4::scale(EYE_SIZE);
 
-    render_random_background(rng,ctx);
+    ctx.framebuffer.bind();
+    unsafe {
+        gl::ClearDepth(1.0);
+        gl::Clear(gl::DEPTH_BUFFER_BIT);
+    }
+    ctx.framebuffer.unbind();
+
+    let mut background = backgrounds.choose(rng).expect("huh?");
+    while (background.size().x < ctx.framebuffer.size.x) || (background.size().y < ctx.framebuffer.size.y) {
+        background = backgrounds.choose(rng).expect("huh?");
+    }
+    let cropspace = *background.size() - ctx.framebuffer.size;
+    let pos = usizev2 { x: (rng.gen::<f32>() * (cropspace.x as f32)) as usize,y: (rng.gen::<f32>() * (cropspace.y as f32)) as usize, };
+    ctx.framebuffer.set(&background.crop_upside_down(usizer { o: pos,s: ctx.framebuffer.size, }));
+
     ctx.framebuffer.bind();
     unsafe {
         gl::Enable(gl::DEPTH_TEST);
@@ -214,7 +202,7 @@ fn random_f32k(rng: &mut rand::rngs::ThreadRng,lo: f32k,hi: f32k) -> f32k {
     )
 }
 
-fn process(rng: &mut rand::rngs::ThreadRng,ctx: &Context,space: &Space,dir_name: &str,csv: &mut fs::File,num: usize) {
+fn process(rng: &mut rand::rngs::ThreadRng,ctx: &Context,backgrounds: &Vec<Image<ARGB8>>,space: &Space,dir_name: &str,csv: &mut fs::File,num: usize) {
     let image_name = format!("{:05}.bmp",num);
     let full_name = format!("{}/{}",dir_name,image_name);
     let mut instance = Instance {
@@ -256,7 +244,7 @@ fn process(rng: &mut rand::rngs::ThreadRng,ctx: &Context,space: &Space,dir_name:
             }
         }
     }
-    save_image(downsample4(render_full(rng,&ctx,&instance)),&full_name);
+    save_image(downsample4(render_full(rng,&ctx,&backgrounds,&instance)),&full_name);
     let pos = instance.projection_matrix * f32v4 { x: instance.pos.x,y: instance.pos.y,z: instance.pos.z,w: 1.0, };
     let ndc = f32v3 {
         x: pos.x / pos.w,
@@ -285,10 +273,21 @@ fn main() {
 
     let mut rng = rand::thread_rng();
 
+    println!("loading backgrounds...");
+    let mut backgrounds: Vec<Image<ARGB8>> = Vec::new();
+    for entry in fs::read_dir("backgrounds").expect("unable to read from backgrounds directory") {
+        let entry = entry.expect("invalid entry").file_name().into_string().expect("unable to convert");
+        let mut file = fs::File::open(format!("backgrounds/{}",entry)).expect("cannot open file");
+        let mut buffer: Vec<u8> = Vec::new();
+        file.read_to_end(&mut buffer).expect("unable to read file");
+        let image = decode::<ARGB8>(&buffer).expect("unable to decode");
+        backgrounds.push(image);
+    }
+
     let space = Space {
         size: usizev2 { x: 256,y: 192, },
         projection_matrix: f32m4x4::perspective(30.0,256.0 / 192.0,0.1,100.0),
-        pos: (f32v3 { x: -1.0,y: -1.0,z: -1.0, },f32v3 { x: 1.0,y: 1.0,z: 0.0, }),
+        pos: (f32v3 { x: -0.1,y: -0.1,z: -1.0, },f32v3 { x: 0.1,y: 0.1,z: 0.0, }),
         head: (f32e { y: -0.8,p: -0.8,b: 0.0, },f32e { y: 0.8,p: 0.8,b: 0.0, }),
         left_eye: (f32e { y: 0.0,p: 0.0,b: 0.0, },f32e { y: 0.0,p: 0.0,b: 0.0, }),
         right_eye: (f32e { y: 0.0,p: 0.0,b: 0.0, },f32e { y: 0.0,p: 0.0,b: 0.0, }),
@@ -296,36 +295,38 @@ fn main() {
         background_color: (f32k { r: 0.0,g: 0.0,b: 0.0, },f32k { r: 0.0,g: 0.0,b: 0.0, }),
         light_color: (f32k { r: 0.7,g: 0.7,b: 0.7, },f32k { r: 0.7,g: 0.7,b: 0.7, }),
         ambient_color: f32k { r: 0.2,g: 0.2,b: 0.2, },
-        skin_color: (f32k { r: 0.6,g: 0.6,b: 0.6, },f32k { r: 0.6,g: 0.6,b: 0.6, }),
+        skin_color: (f32k { r: 0.3,g: 0.3,b: 0.3, },f32k { r: 0.9,g: 0.9,b: 0.9, }),
         sclera_color: f32k { r: 0.8,g: 0.8,b: 0.8, },
         iris_color: (f32k { r: 0.14,g: 0.14,b: 0.30, },f32k { r: 0.14,g: 0.14,b: 0.30, }),
     };
 
     let ctx = Context::new(space.size);
 
+    println!("generating data0...");
     match fs::remove_dir_all("data0") {
         _ => { },
     };
     fs::create_dir("data0").expect("Unable to create directory.");
     let mut data_csv = fs::File::create(format!("data0/files.csv")).expect("Unable to create CSV file.");
-    for i in 0..16384 {
-        process(&mut rng,&ctx,&space,"data0",&mut data_csv,i);
-        println!("{} / 16384",i);
+    for i in 0..32768 {
+        process(&mut rng,&ctx,&backgrounds,&space,"data0",&mut data_csv,i);
+        println!("{} / 32768",i);
     }
 
+    println!("generating test0...");
     match fs::remove_dir_all("test0") {
         _ => { },
     };
     fs::create_dir("test0").expect("Unable to create directory.");
     let mut test_csv = fs::File::create(format!("test0/files.csv")).expect("Unable to create CSV file.");
     for i in 0..256 {
-        process(&mut rng,&ctx,&space,"test0",&mut test_csv,i);
+        process(&mut rng,&ctx,&backgrounds,&space,"test0",&mut test_csv,i);
         println!("{} / 256",i);
     }
 
     let matrix = space.projection_matrix;
 
-    println!("matrix:");
+    println!("projection matrix:");
     println!("    {},{},{},{}",matrix.x.x,matrix.x.y,matrix.x.z,matrix.x.w);
     println!("    {},{},{},{}",matrix.y.x,matrix.y.y,matrix.y.z,matrix.y.w);
     println!("    {},{},{},{}",matrix.z.x,matrix.z.y,matrix.z.z,matrix.z.w);

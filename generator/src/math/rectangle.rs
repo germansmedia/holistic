@@ -30,6 +30,12 @@ pub type u64r = Rectangle<u64>;
 pub type i64r = Rectangle<i64>;
 
 #[allow(non_camel_case_types)]
+pub type usizer = Rectangle<usize>;
+
+#[allow(non_camel_case_types)]
+pub type isizer = Rectangle<isize>;
+
+#[allow(non_camel_case_types)]
 pub type f32r = Rectangle<f32>;
 
 #[allow(non_camel_case_types)]
@@ -51,23 +57,23 @@ impl<T: cmp::PartialEq> cmp::PartialEq for Rectangle<T> where Vec2<T>: cmp::Part
     }
 }
 
-impl<T: fmt::Display> fmt::Display for Rectangle<T> where Vec2<T>: Display {
+impl<T: fmt::Display> fmt::Display for Rectangle<T> where Vec2<T>: fmt::Display {
     fn fmt(&self,f: &mut fmt::Formatter) -> fmt::Result {
         write!(f,"({},{}; {}x{})",self.o.x,self.o.y,self.s.x,self.s.y)
     }
 }
 
-impl<T: fmt::Display> fmt::Debug for Rectangle<T> where Vec2<T>: Display {
+impl<T: fmt::Display> fmt::Debug for Rectangle<T> where Vec2<T>: fmt::Display {
     fn fmt(&self,f: &mut fmt::Formatter) -> fmt::Result {
         write!(f,"({},{}; {}x{})",self.o.x,self.o.y,self.s.x,self.s.y)
     }
 }
 
-impl<T> Zero for Rectangle<T> {
+/*impl<T> Zero for Rectangle<T> {
     fn zero() -> Rectangle<T> {
         Rectangle {
-            o: Vec2::zero(),
-            s: Vec2::zero(),
+            o: Vec2::<T>::zero(),
+            s: Vec2::<T>::zero(),
         }
     }
-}
+}*/

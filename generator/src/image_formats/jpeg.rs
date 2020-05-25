@@ -840,7 +840,7 @@ pub fn test(src: &[u8]) -> Option<usizev2> {
 /// > Progressive mode JPEGs need testing.
 pub fn decode<T: Pixel>(src: &[u8]) -> Result<Image<T>,String> {
 	if from_be16(&src[0..2]) != 0xFFD8 {
-		return Err("Invalid JPEG".to_string());
+		return Err("Invalid JPEG (0xFFD8 missing)".to_string());
 	}
 	let mut qtable = [[0i32; 64]; 4];
 	let mut dcht = [Table::new_empty(); 4];
@@ -875,20 +875,20 @@ pub fn decode<T: Pixel>(src: &[u8]) -> Result<Image<T>,String> {
 			0xFFC0 | 0xFFC1 | 0xFFC2 => {  // baseline sequential, extended sequential, progressive
 				//println!("precision {}",src[sp + 4]);
 				if src[sp + 4] != 8 {
-					return Err("Invalid JPEG".to_string());
+					return Err("Invalid JPEG (not 8-bit)".to_string());
 				}
 				height = from_be16(&src[sp + 5..sp + 7]) as usize;
 				width = from_be16(&src[sp + 7..sp + 9]) as usize;
 				let components = src[sp + 9];
 				//println!("size {}x{}, components {}",width,height,components);
 				if (components != 1) && (components != 3) {
-					return Err("Invalid JPEG".to_string());
+					return Err("Invalid JPEG (not 1 or 3 components)".to_string());
 				}
 				let mut samp = [0u8; 3];
 				let mut tsp = sp + 10;
 				for i in 0..components {
 					if src[tsp] != i + 1 {
-						return Err("Invalid JPEG".to_string());
+						return Err("Invalid JPEG (sample indexing)".to_string());
 					}
 					samp[i as usize] = src[tsp + 1];
 					qt[i as usize] = src[tsp + 2] as usize;
@@ -897,7 +897,7 @@ pub fn decode<T: Pixel>(src: &[u8]) -> Result<Image<T>,String> {
 				}
 				if components == 3 {
 					if (samp[1] != 0x11) || (samp[2] != 0x11) {
-						return Err("Invalid JPEG".to_string());
+						return Err("Invalid JPEG (illegal sampling)".to_string());
 					}
 					let sw = ((samp[0] >> 4) * 8) as usize;
 					let sh = ((samp[0] & 15) * 8) as usize;
@@ -912,7 +912,7 @@ pub fn decode<T: Pixel>(src: &[u8]) -> Result<Image<T>,String> {
 						0x21 => TYPE_YUV422,
 						0x22 => TYPE_YUV420,
 						_ => {
-							return Err("Invalid JPEG".to_string());
+							return Err("Invalid JPEG (illegal sampling)".to_string());
 						},
 					};
 				}
@@ -924,7 +924,6 @@ pub fn decode<T: Pixel>(src: &[u8]) -> Result<Image<T>,String> {
 				}
 				mbtotal = mbwidth * mbheight;
 				coeffs.resize(mbtotal * cpmb as usize,0);
-				//println!("type {:04X}, {} macroblocks in total, {} coefficients per row",itype,mbtotal,mbstride);
 				//println!("size {}x{}, macroblocks {}",width,height,mbtotal);
 			},
 			0xFFC4 => {  // huffman tables
@@ -943,7 +942,7 @@ pub fn decode<T: Pixel>(src: &[u8]) -> Result<Image<T>,String> {
 						total += bits[i] as usize;
 					}
 					if total >= 256 {
-						return Err("Invalid JPEG".to_string());
+						return Err("Invalid JPEG (huffman corrupt)".to_string());
 					}
 					//println!("total codes: {}",total);
 					let mut huffval = [0u8; 256];
@@ -1055,8 +1054,8 @@ pub fn decode<T: Pixel>(src: &[u8]) -> Result<Image<T>,String> {
 					//println!("macroblock {}:",i);
 					unpack_macroblock(&mut reader,&mut coeffs[i * cpmb..(i + 1) * cpmb],&dcht,&acht,&dt,&at,&mut dc,start,end,shift,refine,&mut eobrun,itype,&mut rescnt,resint,mask);
 				}
-				sp = (tsp + reader.leave()) - length - 2;
-				//println!("sp = {}, ({:02X} {:02X})",sp,src[sp + length + 2],src[sp + length + 2 + 1]);
+				let rl = reader.leave();
+				sp = (tsp + rl) - length - 2;
 			},
 			0xFFDB => {  // quantization tables
 				let mut tsp = sp + 4;
@@ -1098,7 +1097,7 @@ pub fn decode<T: Pixel>(src: &[u8]) -> Result<Image<T>,String> {
 						let format = if le { from_le16(&src[tsp..tsp + 2]) } else { from_be16(&src[tsp..tsp + 2]) };
 						tsp += 2;
 						if format > 12 {
-							return Err("Invalid JPEG".to_string());							
+							return Err("Invalid JPEG (bad EXIF)".to_string());							
 						}
 						let components = if le { from_le32(&src[tsp..tsp + 4]) } else { from_be32(&src[tsp..tsp + 4]) };
 						tsp += 4;
@@ -1115,7 +1114,7 @@ pub fn decode<T: Pixel>(src: &[u8]) -> Result<Image<T>,String> {
 							0x0106 => { // photometric interpretation
 								let pe = if le { from_le16(&src[dsp..dsp + 2]) } else { from_be16(&src[dsp..dsp + 2]) };
 								if (pe != 2) || (itype != TYPE_YUV444) {
-									return Err("Invalid JPEG".to_string());
+									return Err("Invalid JPEG (unknown tag)".to_string());
 								}
 								itype = TYPE_RGB444;
 							},
@@ -1130,12 +1129,12 @@ pub fn decode<T: Pixel>(src: &[u8]) -> Result<Image<T>,String> {
 			0xFFC8 | 0xFFDC | 0xFFE0 | 0xFFE2..=0xFFEF | 0xFFF0..=0xFFFF => {  // other accepted markers
 			},
 			_ => { 
-				return Err("Invalid JPEG".to_string());
+				return Err("Invalid JPEG (unknown marker)".to_string());
 			},
 		}
 		sp += length + 2;
 	}
-	Err("Invalid JPEG".to_string())
+	Err("Invalid JPEG (really unknown error)".to_string())
 }
 
 /// Encode a JPEG image.

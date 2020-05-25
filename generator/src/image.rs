@@ -71,4 +71,15 @@ impl<T: Pixel> Image<T> {
     pub fn pixel_mut(&mut self,p: usizev2) -> &mut T {
         &mut self.data[p.y * self.size.x + p.x]
     }
+
+    /// Crop new image. And for some reason this needs to be inverted vertically. Probably because of the texture setting to framebuffer.
+    pub fn crop_upside_down(&self,r: usizer) -> Image<T> {
+        let mut image = Image::<T>::new(r.s);
+        for y in 0..r.s.y {
+            for x in 0..r.s.x {
+                *image.pixel_mut(usizev2 { x: x,y: r.s.y - y - 1, }) = *self.pixel(usizev2 { x: r.o.x + x,y: r.o.y + y, });
+            }
+        }
+        image
+    }
 }
