@@ -1,0 +1,26 @@
+# size of the input frame
+frame_width: 256
+frame_height: 192
+
+# reduction factor frame->cell map
+factor: 16
+
+# threshold to accept a face
+threshold: 0.4
+
+# size of the face analysis cutouts
+cutout_size: 65
+
+# scan hyperparameters
+scan_filters: 64
+scan_modules: 1
+scan_rate: 0.000001
+scan_batch_size: 2
+scan_epochs: 4
+
+# pose hyperparameters
+pose_filters: 64
+pose_modules: 1
+pose_rate: 0.000001
+pose_batch_size: 2
+pose_epochs: 4

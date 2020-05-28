@@ -1,8 +1,0 @@
-'width': 256
-'height': 192
-'size': 129
-'filters': 32
-'modules': 1
-'rate': 0.0000001
-'batch_size': 16
-'epochs': 4

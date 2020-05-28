@@ -16,7 +16,7 @@ from PyQt5.QtCore import *
 import tensorflow as tf
 from tensorflow.keras import Model
 from graphics import *
-from fscan import *
+from scan import *
 from pose import *
 
 TEST_IMAGE = False
@@ -67,44 +67,67 @@ def getCameraFormats(number):
 class ViewerWidget(QWidget):
 
     def __init__(self,holistic,parent=None):
+
         super(ViewerWidget,self).__init__(parent)
+
         self.holistic = holistic
 
     def paintEvent(self,event):
+
         painter = QPainter()
+
         painter.begin(self)
-        factor = self.holistic.application.fscan_model.params['factor']
+
         if self.holistic.application.input_image:
-            xscale = self.width() / self.holistic.application.input_image.width()
-            yscale = self.height() / self.holistic.application.input_image.height()
-            if self.holistic.application.input_image.height() * xscale > self.height():
+
+            # calculate uniform scale
+            xscale = self.width() / self.holistic.application.params.frame_width
+            yscale = self.height() / self.holistic.application.params.frame_height
+            if self.holistic.application.params.frame_height * xscale > self.height():
                 scale = yscale
             else:
                 scale = xscale
-            xsize = scale * self.holistic.application.input_image.width()
-            ysize = scale * self.holistic.application.input_image.height()
+
+            # calculate resulting frame scale and offset
+            xsize = scale * self.holistic.application.params.frame_width
+            ysize = scale * self.holistic.application.params.frame_height
             xstart = 0.5 * (self.width() - xsize)
             ystart = 0.5 * (self.height() - ysize)
-            xpsize = xsize / self.holistic.application.input_image.width()
-            ypsize = ysize / self.holistic.application.input_image.height()
+
+            # calculate multiplier for frame coordinates -> widget coordinates
+            xpsize = xsize / self.holistic.application.params.frame_width
+            ypsize = ysize / self.holistic.application.params.frame_height
+
+            # draw frame
             painter.drawImage(QRect(xstart,ystart,xsize,ysize),self.holistic.application.input_image)
-            painter.setCompositionMode(QPainter.CompositionMode_Plus)
-            if self.holistic.application.fscan_image:
-                painter.drawImage(QRect(xstart,ystart,xsize,ysize),self.holistic.application.fscan_image)
+
+            if self.holistic.application.scan_image:
+
+                # draw scan result cells
+                print('drawing cells {},{} ({}x{})'.format(xstart,ystart,xsize,ysize))
+                painter.setCompositionMode(QPainter.CompositionMode_Plus)
+                painter.drawImage(QRect(xstart,ystart,xsize,ysize),self.holistic.application.scan_image)
+
                 if self.holistic.application.face_params != None:
+
+                    # draw blue rectangle of grabbed image
                     px = self.holistic.application.face_params[0]
                     py = self.holistic.application.face_params[1]
-                    painter.fillRect(xstart + (px - 65) * xpsize,ystart + (py - 65) * ypsize,129 * xpsize,129 * ypsize,QColor(0,0,255))
-                    painter.setCompositionMode(QPainter.CompositionMode_SourceOver)
-                    painter.drawImage(0,0,self.holistic.application.pose_image)
+                    full = self.holistic.application.params.cutout_size
+                    half = int((full - 1) / 2)
+                    painter.fillRect(xstart + (px - half) * xpsize,ystart + (py - half) * ypsize,full * xpsize,full * ypsize,QColor(0,0,255))
+
+                    # draw green dot at predicted screen coordinates
                     dx = self.holistic.application.face_params[2][0]
                     dy = self.holistic.application.face_params[2][1]
-                    ndcz = self.holistic.application.face_params[2][2]
-                    heady = self.holistic.application.face_params[2][3]
-                    headp = self.holistic.application.face_params[2][4]
-                    screenx = self.holistic.application.face_params[0] + dx
-                    screeny = self.holistic.application.face_params[1] + dy
+                    screenx = px + dx
+                    screeny = py + dy
                     painter.fillRect(xstart + (screenx - 2) * xpsize,ystart + (screeny - 2) * ypsize,5 * xpsize,5 * ypsize,QColor(0,255,0))
+
+                    # draw rectangle image in the corner
+                    painter.setCompositionMode(QPainter.CompositionMode_Source)
+                    painter.drawImage(0,0,self.holistic.application.pose_image)
+
         painter.end()
 
 class Holistic(QMainWindow):
@@ -139,97 +162,139 @@ class Holistic(QMainWindow):
 class Application(QApplication):
 
     def __init__(self,argv):
+
         super(QApplication,self).__init__(argv)
+
+        self.params = Params('params.yaml')
+
+        self.graphics = Graphics()
+
         self.stop_process = False
         self.lastWindowClosed.connect(self.quit)
-        self.graphics = Graphics()
+
         if not TEST_IMAGE:
             self.camera = cv2.VideoCapture(0)
             self.camera.set(cv2.CAP_PROP_FRAME_WIDTH,640)
             self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT,480)
             self.camera.set(cv2.CAP_PROP_FPS,60)
+
         self.input_image = None
-        self.fscan_image = None
+        self.scan_image = None
+        self.pose_image = None
         self.face_params = None
-        self.fscan_model = ModelFSCAN()
-        self.pose_model = ModelPOSE()
+
+        self.scan_model = ScanModel(self.params,'scan.h5')
+        self.pose_model = PoseModel(self.params,'pose.h5')
         self.holistic = Holistic(self)
         if not TEST_IMAGE:
             self.process_thread = threading.Thread(target=self.processThread,args=())
             self.process_thread.start()
         else:
-            self.process(cv2.cvtColor(cv2.imread('test0/00250.bmp'),cv2.COLOR_BGR2RGB))
+            input_frame = cv2.resize(cv2.imread('test0/00004.bmp'),(self.params.frame_width,self.params.frame_height))
+            self.process(input_frame)
+
 
     def quit(self):
+
         if not TEST_IMAGE:
             self.stop_process = True
             self.process_thread.join()
 
     def process(self,input_frame):
-            # turn into QImage
-            self.input_image = QImage(input_frame.data,input_frame.shape[1],input_frame.shape[0],QImage.Format_RGB888)
 
-            # run fscan
-            fscan_input = np.multiply(input_frame.astype(np.float32),1.0 / 255.0)
-            fscan_output = self.fscan_model(fscan_input)
-            fscan_frame = cv2.cvtColor(np.multiply(fscan_output,255.0).astype(np.uint8),cv2.COLOR_GRAY2RGBA)
+        # turn into QImage
+        bgr_version = cv2.cvtColor(input_frame,cv2.COLOR_RGB2BGR)
+        self.input_image = QImage(bgr_version.data,bgr_version.shape[1],bgr_version.shape[0],QImage.Format_RGB888)
 
-            # clear green & blue channels, and set alpha
-            fscan_frame[:,:,1] = 0
-            fscan_frame[:,:,2] = 0
-            fscan_frame[:,:,3] = 255
+        # run scan
+        scan_input = np.multiply(input_frame.astype(np.float32),1.0 / 255.0)
+        scan_output = self.scan_model.infer(scan_input)
+        scan_frame = cv2.cvtColor(np.multiply(scan_output,255.0).astype(np.uint8),cv2.COLOR_GRAY2RGBA)
 
-            # turn into QImage
-            self.fscan_image = QImage(fscan_frame.data,fscan_frame.shape[1],fscan_frame.shape[0],QImage.Format_RGBA8888)
+        # clear green & blue channels, and set alpha
+        scan_frame[:,:,1] = 0
+        scan_frame[:,:,2] = 0
+        scan_frame[:,:,3] = 255
 
-            # find peak
-            width = self.fscan_model.params['width']
-            height = self.fscan_model.params['height']
-            factor = self.fscan_model.params['factor']
-            px = -1
-            py = -1
-            highest = 0.0
-            threshold = 0.1
-            for y in range(0,int(height / factor)):
-                for x in range(0,int(width / factor)):
-                    if fscan_output[y][x] > highest:
-                        highest = fscan_output[y][x]
-                        px = x
-                        py = y
+        # turn into QImage
+        self.scan_image = QImage(scan_frame.data,scan_frame.shape[1],scan_frame.shape[0],QImage.Format_RGBA8888)
+
+        # -- copied from scan.py (refactor into separate calls):
+
+        # width and height of scan_output
+        rwidth = int(math.floor(self.params.frame_width / self.params.factor))
+        rheight = int(math.floor(self.params.frame_height / self.params.factor))
+
+        # find the cell with the highest result
+        px = -1
+        py = -1
+        highest = 0.0
+        for y in range(0,rheight):
+            for x in range(0,rwidth):
+                if scan_output[y,x] > highest:
+                    highest = scan_output[y,x]
+                    px = x
+                    py = y
+
+        if highest > self.params.threshold:
+
+            # adjust subcell accuracy
+            if py > 0:
+                u = scan_output[py - 1,px]
+            else:
+                u = 0.0
+            if py < rheight - 1:
+                d = scan_output[py + 1,px]
+            else:
+                d = 0.0
+            if px > 0:
+                l = scan_output[py,px - 1]
+            else:
+                l = 0.0
+            if px < rwidth - 1:
+                r = scan_output[py,px + 1]
+            else:
+                r = 0.0
+            totalx = highest + l + r
+            totaly = highest + u + d
+            ax = (r - l) / totalx
+            ay = (d - u) / totaly
+
+            # add adjustment, and take center of the cell
+            px = int((px + 0.5 + ax) * self.params.factor)
+            py = int((py + 0.5 + ay) * self.params.factor)
 
             # create cutout
-            if highest > threshold:
-                px *= factor
-                py *= factor
+            pose_input = np.zeros((self.params.cutout_size,self.params.cutout_size,3),np.float32)
+            half = int((self.params.cutout_size - 1) / 2)
+            for y in range(-half,half + 1):
+                cy = int(py + y)
+                if (cy >= 0) and (cy < self.params.frame_height):
+                    for x in range(-half,half + 1):
+                        cx = int(px + x)
+                        if (cx >= 0) and (cx < self.params.frame_width):
+                            pose_input[half + y,half + x] = scan_input[cy,cx]
 
-                pose_input = np.zeros((129,129,3),np.float32)
-                for y in range(-64,65):
-                    cy = int(py + y)
-                    if (cy >= 0) and (cy < height):
-                        for x in range(-64,65):
-                            cx = int(px + x)
-                            if (cx >= 0) and (cx < width):
-                                pose_input[y + 64,x + 64] = fscan_input[cy,cx]
+            # turn into QImage
+            bgra_version = cv2.cvtColor(pose_input,cv2.COLOR_RGB2BGR)
+            self.pose_image = QImage(bgra_version.data,bgra_version.shape[1],bgra_version.shape[0],QImage.Format_RGB888)
 
-                # turn into QImage
-                self.pose_image = QImage(pose_input.data,pose_input.shape[1],pose_input.shape[0],QImage.Format_RGB888)
-
-                # run pose
-                pose_output = self.pose_model(pose_input)
+            # run pose
+            pose_output = self.pose_model.infer(pose_input)
                 
-                # update the data
-                self.face_params = (px,py,pose_output)
+            # update the face parameter
+            self.face_params = (px,py,pose_output)
 
-            else:
-                self.face_params = None
+        else:
+            self.face_params = None
 
-            # update the viewer
-            self.holistic.viewer.update()
+        # update the viewer
+        self.holistic.viewer.update()
 
     def processThread(self):
         while not self.stop_process:
             ret,input_frame = self.camera.read()
-            input_frame = cv2.resize(cv2.cvtColor(input_frame,cv2.COLOR_BGR2RGB),(self.fscan_model.params['width'],self.fscan_model.params['height']))
+            input_frame = cv2.resize(input_frame,(self.params.frame_width,self.params.frame_height))
             self.process(input_frame)
 
 if __name__ == '__main__':

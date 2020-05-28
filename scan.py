@@ -11,19 +11,7 @@ import shutil
 import numpy as np
 import tensorflow as tf
 from tensorflow.keras import datasets,layers,models,losses,optimizers,Model
-
-class ScanParams:
-
-    def __init__(self,name):
-        params = yaml.load(open(name,'r'))
-        self.width = params['width']
-        self.height = params['height']
-        self.factor = params['factor']
-        self.filters = params['filters']
-        self.modules = params['modules']
-        self.rate = params['rate']
-        self.batch_size = params['batch_size']
-        self.epochs = params['epochs']
+from params import *
 
 class ScanModel:
 
@@ -44,16 +32,16 @@ class ScanModel:
         print('initializing model...')
 
         # input layer
-        inputs = layers.Input(shape=(self.params.height,self.params.width,3))
+        inputs = layers.Input(shape=(self.params.frame_height,self.params.frame_width,3))
 
         # encoding/reduction stack
-        a = encoding(inputs,self.params.filters,self.params.modules)
+        a = encoding(inputs,self.params.scan_filters,self.params.scan_modules)
         cur = 1
         while cur < self.params.factor:
             a = reduction(a)
-            a = encoding(a,self.params.filters,self.params.modules)
+            a = encoding(a,self.params.scan_filters,self.params.scan_modules)
             cur *= 2
-        a = encoding(a,self.params.filters,self.params.modules)
+        a = encoding(a,self.params.scan_filters,self.params.scan_modules)
 
         # output layer
         outputs = layers.Conv2D(1,(1,1),activation='sigmoid',padding='same')(a)
@@ -61,9 +49,11 @@ class ScanModel:
         # setup model
         self.model = Model(inputs=inputs,outputs=outputs)
         self.model.compile(
-            optimizer=optimizers.Nadam(learning_rate=self.params.rate),
+            optimizer=optimizers.Nadam(learning_rate=self.params.scan_rate),
             loss='binary_crossentropy',
             metrics=['acc'])
+
+        self.model.summary()
 
         # load weights, if needed
         if weights_name != None:
@@ -138,19 +128,19 @@ class ScanDataset:
                 image = np.multiply(cv2.imread(path + name).astype(np.float32),1.0 / 255.0)
 
                 # prepare empty output
-                rwidth = int(math.floor(self.params.width / self.params.factor))
-                rheight = int(math.floor(self.params.height / self.params.factor))
+                rwidth = int(math.floor(self.params.frame_width / self.params.factor))
+                rheight = int(math.floor(self.params.frame_height / self.params.factor))
                 output = np.zeros((rheight,rwidth),dtype=np.float32)
 
                 # take the screen coordinates as output
-                x = int(math.floor(screen[0] / self.params.factor))
-                y = int(math.floor(screen[1] / self.params.factor))
+                px = int(math.floor(screen[0] / self.params.factor))
+                py = int(math.floor(screen[1] / self.params.factor))
 
                 # if they really fit inside the output
-                if (x >= 0) and (x < rwidth) and (y >= 0) and (y < rheight):
+                if (px >= 0) and (px < rwidth) and (py >= 0) and (py < rheight):
 
                     # light up that point
-                    output[y][x] = 1.0
+                    output[py][px] = 1.0
 
                     # and append input, output and instance
                     inputs.append(image)
@@ -188,8 +178,8 @@ class ScanTraining:
         model.model.fit(
             x=self.train_inputs,
             y=self.train_outputs,
-            epochs=self.params.epochs,
-            batch_size=self.params.batch_size,
+            epochs=self.params.scan_epochs,
+            batch_size=self.params.scan_batch_size,
             validation_data=[self.val_inputs,self.val_outputs],
             verbose=2,
         )
@@ -205,8 +195,8 @@ class ScanTraining:
         model.model.fit(
             x=self.train_inputs,
             y=self.train_outputs,
-            epochs=self.params.epochs,
-            batch_size=self.params.batch_size,
+            epochs=self.params.scan_epochs,
+            batch_size=self.params.scan_batch_size,
             validation_data=[self.val_inputs,self.val_outputs],
             verbose=2
         )
@@ -223,6 +213,7 @@ class ScanTesting:
         self.model = ScanModel(self.params,weights_name)
 
         self.errors = []
+        self.error_names = ['screen.x','screen.y']
 
         self.generate_writer = None
         self.generate_n = 0
@@ -233,12 +224,9 @@ class ScanTesting:
         # prepare dataset for testing
         dataset = ScanDataset(self.params,path,csv_name)
 
-        # define threshold
-        threshold = 0.3
-
         # for each instance
-        rwidth = int(math.floor(self.params.width / self.params.factor))
-        rheight = int(math.floor(self.params.height / self.params.factor))
+        rwidth = int(math.floor(self.params.frame_width / self.params.factor))
+        rheight = int(math.floor(self.params.frame_height / self.params.factor))
         for i in range(0,len(dataset.inputs)):
 
             # run the network
@@ -250,39 +238,38 @@ class ScanTesting:
             highest = 0.0
             for y in range(0,rheight):
                 for x in range(0,rwidth):
-                    if result[y][x][0] > highest:
-                        highest = result[y][x][0]
+                    if result[y,x] > highest:
+                        highest = result[y,x]
                         px = x
                         py = y
 
-            if highest > threshold:
+            if highest > self.params.threshold:
 
                 print('    {} / {}'.format(i,len(dataset.inputs) - 1))
 
                 # adjust subcell accuracy
                 if py > 0:
-                    u = result[py - 1][px][0]
+                    u = result[py - 1,px]
                 else:
                     u = 0.0
                 if py < rheight - 1:
-                    d = result[py + 1][px][0]
+                    d = result[py + 1,px]
                 else:
                     d = 0.0
                 if px > 0:
-                    l = result[py][px - 1][0]
+                    l = result[py,px - 1]
                 else:
                     l = 0.0
                 if px < rwidth - 1:
-                    r = result[py][px + 1][0]
+                    r = result[py,px + 1]
                 else:
                     r = 0.0
-                totalx = highest + l + r
-                totaly = highest + u + d
-                ax = (r - l) / totalx
-                ay = (d - u) / totaly
+                ax = (r - l) / (highest + r + l)
+                ay = (d - u) / (highest + d + u)
 
-                px = int((px + ax) * self.params.factor)
-                py = int((py + ay) * self.params.factor)
+                # add adjustment, and take center of the cell
+                px = int((px + 0.5 + ax) * self.params.factor)
+                py = int((py + 0.5 + ay) * self.params.factor)
 
                 # and run the per-instance test
                 instance_proc(dataset.inputs[i],dataset.instances[i],(px,py))
@@ -302,14 +289,15 @@ class ScanTesting:
     def generate_cutout(self,image,instance,inferred):
 
         # create cutout
-        cutout = np.zeros((129,129,3),np.float32)
-        for y in range(-64,65):
+        cutout = np.zeros((self.params.cutout_size,self.params.cutout_size,3),np.float32)
+        half = int((self.params.cutout_size - 1) / 2)
+        for y in range(-half,half + 1):
             cy = int(inferred[1] + y)
-            if (cy >= 0) and (cy < self.params.height):
-                for x in range(-64,65):
+            if (cy >= 0) and (cy < self.params.frame_height):
+                for x in range(-half,half + 1):
                     cx = int(inferred[0] + x)
-                    if (cx >= 0) and (cx < self.params.width):
-                        cutout[y + 64,x + 64] = image[cy,cx]
+                    if (cx >= 0) and (cx < self.params.frame_width):
+                        cutout[y + half,x + half] = image[cy,cx]
         
         # save cutout
         cutout = np.multiply(cutout,255.0)
@@ -322,15 +310,14 @@ class ScanTesting:
             name,
             inferred[0],inferred[1],
             instance.screen[0],instance.screen[1],
+            instance.ndc[0],instance.ndc[1],instance.ndc[2],
             instance.head_pos[0],instance.head_pos[1],instance.head_pos[2],
             instance.head_dir[0],instance.head_dir[1],
-            instance.ndc[0],instance.ndc[1],instance.ndc[2],
             instance.light_dir[0],instance.light_dir[1],
             instance.light_color[0],instance.light_color[1],instance.light_color[2],
             instance.ambient_color[0],instance.ambient_color[1],instance.ambient_color[2],
             instance.skin_color[0],instance.skin_color[1],instance.skin_color[2]
         ])
-
         self.generate_n += 1
 
     def process_errors(self):
@@ -370,12 +357,12 @@ class ScanTesting:
         print('statistics:')
         print('    # of samples: {}'.format(total))
         for i in range(0,n):
-            print('    parameter {:2}: {:5.3} +/- {:5.3}'.format(i,avg[i],stddev[i]))
+            print('    {:>16}: {:>6.3f} +/- {:>6.3f}'.format(self.error_names[i],avg[i],stddev[i]))
 
 if __name__ == '__main__':
     
     # get parameters for this stage
-    params = ScanParams('./scan.yaml')
+    params = Params('./params.yaml')
 
     # define names of the paths and files
     weights_name = './scan.h5'
@@ -433,7 +420,7 @@ if __name__ == '__main__':
         testing = ScanTesting(params,weights_name)
 
         # run test cycle on ./data0/, and create cutouts in ./data1/
-        print('running test cycle to generate cutouts for {}...',path1data)
+        print('running test cycle to generate cutouts for {}...'.format(path1data))
         if os.path.exists(path1data):
             shutil.rmtree(path1data)
         os.mkdir(path1data)
@@ -444,7 +431,7 @@ if __name__ == '__main__':
             testing.run_test(path0data,csv0data,testing.generate_cutout)
 
         # run test cycle on ./test0/, and create cutouts in ./test1/
-        print('running test cycle to generate cutouts for {}...',path1test)
+        print('running test cycle to generate cutouts for {}...'.format(path1test))
         if os.path.exists(path1test):
             shutil.rmtree(path1test)
         os.mkdir(path1test)
