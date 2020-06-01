@@ -13,358 +13,214 @@ import tensorflow as tf
 from tensorflow.keras import datasets,layers,models,losses,optimizers,Model
 from params import *
 
-class ScanModel:
-
-    def __init__(self,params,weights_name=None):
-
-        self.params = params
-
-        # CNN encoding helper
-        def encoding(a,filters,modules):
-            for i in range(0,modules):
-                a = layers.Conv2D(filters,(3,3),activation='relu',padding='same')(a)
-            return a
-
-        # CNN reduction helper
-        def reduction(a):
-            return layers.MaxPooling2D((2,2))(a)
-
-        print('initializing model...')
-
-        # input layer
-        inputs = layers.Input(shape=(self.params.frame_height,self.params.frame_width,3))
-
-        # encoding/reduction stack
-        a = encoding(inputs,self.params.scan_filters,self.params.scan_modules)
-        cur = 1
-        while cur < self.params.factor:
-            a = reduction(a)
-            a = encoding(a,self.params.scan_filters,self.params.scan_modules)
-            cur *= 2
-        a = encoding(a,self.params.scan_filters,self.params.scan_modules)
-
-        # output layer
-        outputs = layers.Conv2D(1,(1,1),activation='sigmoid',padding='same')(a)
-
-        # setup model
-        self.model = Model(inputs=inputs,outputs=outputs)
-        self.model.compile(
-            optimizer=optimizers.Nadam(learning_rate=self.params.scan_rate),
-            loss='binary_crossentropy',
-            metrics=['acc'])
-
-        self.model.summary()
-
-        # load weights, if needed
-        if weights_name != None:
-            print('loading model weights...')
-            self.model.load_weights(weights_name)
-
-    def infer(self,inputs):
-        return self.model.predict(tf.expand_dims(inputs,0),steps=1)[0]
-
-### everything below here is only for training and testing the network
-
-class ScanDataset:
-
-    class Instance:
-        def __init__(self,image_name,head_pos,head_dir,ndc,screen,light_dir,light_color,ambient_color,skin_color):
-            self.image_name = image_name
-            self.head_pos = head_pos
-            self.head_dir = head_dir
-            self.ndc = ndc
-            self.screen = screen
-            self.light_dir = light_dir
-            self.light_color = light_color
-            self.ambient_color = ambient_color
-            self.skin_color = skin_color
-
-    def __init__(self,params,path,csv_name):
-
-        self.params = params
-
-        print('loading {} dataset...'.format(path))
-
-        # prepare inputs, outputs and instances
-        inputs = []
-        outputs = []
-        instances = []
-
-        # read all rows in the CSV
-        with open(csv_name,newline='') as file:
-            for row in csv.reader(file):
-
-                # read one row
-                r = 0
-
-                name = row[r]
-                r += 1
-
-                head_pos = (float(row[r]),float(row[r + 1]),float(row[r + 2]))
-                r += 3
-
-                head_dir = (float(row[r]),float(row[r + 1]))
-                r += 2
-
-                ndc = (float(row[r]),float(row[r + 1]),float(row[r + 2]))
-                r += 3
-
-                screen = (float(row[r]),float(row[r + 1]))
-                r += 2
-
-                light_dir = (float(row[r]),float(row[r + 1]))
-                r += 2
-
-                light_color = (float(row[r]),float(row[r + 1]),float(row[r + 2]))
-                r += 3
-
-                ambient_color = (float(row[r]),float(row[r + 1]),float(row[r + 2]))
-                r += 3
-
-                skin_color = (float(row[r]),float(row[r + 1]),float(row[r + 2]))
-                r += 3
-
-                # load image as input
-                image = np.multiply(cv2.imread(path + name).astype(np.float32),1.0 / 255.0)
-
-                # prepare empty output
-                rwidth = int(math.floor(self.params.frame_width / self.params.factor))
-                rheight = int(math.floor(self.params.frame_height / self.params.factor))
-                output = np.zeros((rheight,rwidth),dtype=np.float32)
-
-                # take the screen coordinates as output
-                px = int(math.floor(screen[0] / self.params.factor))
-                py = int(math.floor(screen[1] / self.params.factor))
-
-                # if they really fit inside the output
-                if (px >= 0) and (px < rwidth) and (py >= 0) and (py < rheight):
-
-                    # light up that point
-                    output[py][px] = 1.0
-
-                    # and append input, output and instance
-                    inputs.append(image)
-                    outputs.append(output)
-                    instances.append(ScanDataset.Instance(name,head_pos,head_dir,ndc,screen,light_dir,light_color,ambient_color,skin_color))
-
-        # convert inputs and outputs to numpy arrays
-        self.inputs = np.array(inputs)
-        self.outputs = np.array(outputs)
-
-        self.instances = instances
-
-class ScanTraining:
-
-    def __init__(self,params,path,csv_name):
-
-        self.params = params
-
-        self.dataset = ScanDataset(params,path,csv_name)
-
-        print('splitting dataset into training and validation parts...')
-        n = int(0.2 * self.dataset.inputs.shape[0])
-        self.train_inputs = self.dataset.inputs[n:]
-        self.train_outputs = self.dataset.outputs[n:]
-        self.train_instances = self.dataset.instances[n:]
-        self.val_inputs = self.dataset.inputs[:n]
-        self.val_outputs = self.dataset.outputs[:n]
-        self.val_instances = self.dataset.instances[:n]
-
-    def train(self,weights_name):
-
-        model = ScanModel(self.params)
-
-        print('fitting model...')
-        model.model.fit(
-            x=self.train_inputs,
-            y=self.train_outputs,
-            epochs=self.params.scan_epochs,
-            batch_size=self.params.scan_batch_size,
-            validation_data=[self.val_inputs,self.val_outputs],
-            verbose=2,
-        )
-
-        print('saving weights...')
-        model.model.save_weights(weights_name)
-
-    def train_more(self,weights_name):
-
-        model = ScanModel(self.params,weights_name)
-
-        print('fitting model...')
-        model.model.fit(
-            x=self.train_inputs,
-            y=self.train_outputs,
-            epochs=self.params.scan_epochs,
-            batch_size=self.params.scan_batch_size,
-            validation_data=[self.val_inputs,self.val_outputs],
-            verbose=2
-        )
-
-        print('saving weights...')
-        model.model.save_weights(weights_name)
-
-class ScanTesting:
-
-    def __init__(self,params,weights_name):
-
-        self.params = params
-
-        self.model = ScanModel(self.params,weights_name)
-
-        self.errors = []
-        self.error_names = ['screen.x','screen.y']
-
-        self.generate_writer = None
-        self.generate_n = 0
-        self.generate_path = None
-
-    def run_test(self,path,csv_name,instance_proc):
-
-        # prepare dataset for testing
-        dataset = ScanDataset(self.params,path,csv_name)
-
-        # for each instance
-        rwidth = int(math.floor(self.params.frame_width / self.params.factor))
-        rheight = int(math.floor(self.params.frame_height / self.params.factor))
-        for i in range(0,len(dataset.inputs)):
-
-            # run the network
-            result = self.model.infer(dataset.inputs[i])
-
-            # find the cell with the highest result
-            px = -1
-            py = -1
-            highest = 0.0
-            for y in range(0,rheight):
-                for x in range(0,rwidth):
-                    if result[y,x] > highest:
-                        highest = result[y,x]
-                        px = x
-                        py = y
-
-            if highest > self.params.threshold:
-
-                print('    {} / {}'.format(i,len(dataset.inputs) - 1))
-
-                # adjust subcell accuracy
-                if py > 0:
-                    u = result[py - 1,px]
-                else:
-                    u = 0.0
-                if py < rheight - 1:
-                    d = result[py + 1,px]
-                else:
-                    d = 0.0
-                if px > 0:
-                    l = result[py,px - 1]
-                else:
-                    l = 0.0
-                if px < rwidth - 1:
-                    r = result[py,px + 1]
-                else:
-                    r = 0.0
-                ax = (r - l) / (highest + r + l)
-                ay = (d - u) / (highest + d + u)
-
-                # add adjustment, and take center of the cell
-                px = int((px + 0.5 + ax) * self.params.factor)
-                py = int((py + 0.5 + ay) * self.params.factor)
-
-                # and run the per-instance test
-                instance_proc(dataset.inputs[i],dataset.instances[i],(px,py))
-
+def encoding(a,filters,modules):
+    for i in range(0,modules):
+        a = layers.Conv2D(filters,(3,3),activation='relu',padding='same')(a)
+    return a
+
+def reduction(a):
+    return layers.MaxPooling2D((2,2))(a)
+
+def create(frame_width,frame_height,factor,filters,modules,rate):
+    inputs = layers.Input(shape=(frame_height,frame_width,4))
+    a = encoding(inputs,filters,modules)
+    cur = 1
+    while cur < factor:
+        a = reduction(a)
+        a = encoding(a,filters,modules)
+        cur *= 2
+    outputs = layers.Conv2D(1,(1,1),activation='sigmoid',padding='same')(a)
+    model = Model(inputs=inputs,outputs=outputs)
+    model.compile(
+        optimizer=optimizers.Nadam(learning_rate=rate),
+        loss='binary_crossentropy',
+        metrics=['accuracy'],
+    )
+    model.summary()
+    return model
+
+def infer(model,inputs):
+    return model.predict(tf.expand_dims(inputs,0),steps=1)[0]
+
+def load_dataset(frame_width,frame_height,factor,path,csv_name):
+    rwidth = int(math.floor(frame_width / factor))
+    rheight = int(math.floor(frame_height / factor))
+    inputs = []
+    outputs = []
+    instances = []
+    with open(csv_name,newline='') as file:
+        for row in csv.reader(file):
+            r = 0
+            name = row[r]
+            r += 1
+            head_pos = (float(row[r]),float(row[r + 1]),float(row[r + 2]))
+            r += 3
+            head_dir = (float(row[r]),float(row[r + 1]))
+            r += 2
+            ndc = (float(row[r]),float(row[r + 1]),float(row[r + 2]))
+            r += 3
+            screen = (float(row[r]),float(row[r + 1]))
+            r += 2
+            light_dir = (float(row[r]),float(row[r + 1]))
+            r += 2
+            light_color = (float(row[r]),float(row[r + 1]),float(row[r + 2]))
+            r += 3
+            ambient_color = (float(row[r]),float(row[r + 1]),float(row[r + 2]))
+            r += 3
+            skin_color = (float(row[r]),float(row[r + 1]),float(row[r + 2]))
+            r += 3
+            image = np.multiply(cv2.imread(path + name,cv2.IMREAD_UNCHANGED).astype(np.float32),1.0 / 255.0)
+            output = np.zeros((rheight,rwidth,1),dtype=np.float32)
+            px = int(math.floor(screen[0] / factor))
+            py = int(math.floor(screen[1] / factor))
+            if (px >= 0) and (px < rwidth) and (py >= 0) and (py < rheight):
+                output[py,px] = 1.0
+                inputs.append(image)
+                outputs.append(output)
+                instances.append((name,head_pos,head_dir,ndc,screen,light_dir,light_color,ambient_color,skin_color))
+    return (np.array(inputs),np.array(outputs),instances)
+
+def train(model,dataset,epochs,batch_size):
+    n = int(0.2 * dataset[0].shape[0])
+    x_train = dataset[0][n:]
+    y_train = dataset[1][n:]
+    x_val = dataset[0][:n]
+    y_val = dataset[1][:n]
+    history = model.fit(
+        x=x_train,
+        y=y_train,
+        validation_data=[x_val,y_val],
+        epochs=epochs,
+        batch_size=batch_size,
+        verbose=2,
+    )
+
+def find(image,inference,frame_width,frame_height,factor,threshold):
+    rwidth = int(math.floor(frame_width / factor))
+    rheight = int(math.floor(frame_height / factor))
+    px = -1
+    py = -1
+    highest = 0.0
+    for y in range(0,rheight):
+        for x in range(0,rwidth):
+            if inference[y,x,0] > highest:
+                highest = inference[y,x,0]
+                px = x
+                py = y
+    if highest > threshold:
+        if py > 0:
+            u = inference[py - 1,px,0]
+        else:
+            u = 0.0
+        if py < rheight - 1:
+            d = inference[py + 1,px,0]
+        else:
+            d = 0.0
+        if px > 0:
+            l = inference[py,px - 1,0]
+        else:
+            l = 0.0
+        if px < rwidth - 1:
+            r = inference[py,px + 1,0]
+        else:
+            r = 0.0
+        px += (r - l) / (highest + r + l)
+        py += (d - u) / (highest + d + u)
+        px = int((px + 0.5) * factor)
+        py = int((py + 0.5) * factor)
+        return (px,py)
+    else:
+        return None
+
+def test(model,dataset,frame_width,frame_height,factor,threshold):
+    errors = []
+    error_names = ['screen.x','screen.y']
+    for i in range(0,len(dataset[0])):
+        inference = infer(model,dataset[0][i])
+        result = find(dataset[0][i],inference,frame_width,frame_height,factor,threshold)
+        if result != None:
+            print('    {} / {}'.format(i,len(dataset[0]) - 1))
+            ex = dataset[2][i][4][0] - result[0]
+            ey = dataset[2][i][4][1] - result[1]
+            errors.append((ex,ey))
+        else:
+            print('    {} / {} not found'.format(i,len(dataset[0]) - 1))
+    total = len(errors)
+    n = len(errors[0])
+    avg = []
+    for i in range(0,n):
+        avg.append(0.0)
+    for error in errors:
+        for i in range(0,n):
+            avg[i] += error[i]
+    for i in range(0,n):
+        avg[i] /= total
+    dif = []
+    for i in range(0,n):
+        dif.append(0.0)
+    for error in errors:
+        for i in range(0,n):
+            d = error[i] - avg[i]
+            dif[i] += d * d
+    almost_total = total - 1.0
+    for i in range(0,n):
+        dif[i] /= almost_total
+    stddev = []
+    for i in range(0,n):
+        stddev.append(math.sqrt(dif[i]))
+    print('statistics:')
+    for i in range(0,n):
+        print('    {:>16}: {:>6.3f} +/- {:>6.3f}'.format(error_names[i],avg[i],stddev[i]))
+
+def rgb2float(image,image_depth):
+    r,g,b = image.split()
+    rgba = cv2.merge(r,g,b,image_depth)
+    return np.multiply(rgba.astype(np.float32),1.0 / 255.0)
+
+def float2rgb(image):
+    return np.multiply(image,255.0).astype(np.uint8)
+
+def generate_cutout(px,py,image,frame_width,frame_height,cutout_size):
+    cutout = np.zeros((cutout_size,cutout_size,4),np.float32)
+    half = int((cutout_size - 1) / 2)
+    for y in range(-half,half + 1):
+        cy = int(py + y)
+        if (cy >= 0) and (cy < frame_height):
+            for x in range(-half,half + 1):
+                cx = int(px + x)
+                if (cx >= 0) and (cx < frame_width):
+                    cutout[y + half,x + half] = image[cy,cx]
+    return cutout
+
+def generate_cutouts(model,dataset,frame_width,frame_height,factor,threshold,cutout_size,path,csv_name):
+    with open(csv_name,'w',newline='') as file:
+        writer = csv.writer(file)
+        for i in range(0,len(dataset[0])):
+            inference = infer(model,dataset[0][i])
+            result = find(dataset[0][i],inference,frame_width,frame_height,factor,threshold)
+            if result != None:
+                print('    {} / {}'.format(i,len(dataset[0]) - 1))
+                cutout = generate_cutout(result[0],result[1],dataset[0][i],frame_width,frame_height,cutout_size)
+                name = '{:05}.png'.format(i)
+                cv2.imwrite(path + name,float2rgb(cutout))
+                writer.writerow([
+                    name,
+                    result[0],result[1],
+                    dataset[2][i][4][0],dataset[2][i][4][1],
+                    dataset[2][i][3][0],dataset[2][i][3][1],dataset[2][i][3][2],
+                    dataset[2][i][1][0],dataset[2][i][1][1],dataset[2][i][1][2],
+                    dataset[2][i][2][0],dataset[2][i][2][1],
+                    dataset[2][i][5][0],dataset[2][i][5][1],
+                    dataset[2][i][6][0],dataset[2][i][6][1],dataset[2][i][6][2],
+                    dataset[2][i][7][0],dataset[2][i][7][1],dataset[2][i][7][2],
+                    dataset[2][i][8][0],dataset[2][i][8][1],dataset[2][i][8][2],
+                ])
             else:
-                print('    {} / {} not found'.format(i,len(dataset.inputs) - 1))
-
-    def collect_errors(self,image,instance,inferred):
-
-        # calculate screen-space error
-        ex = instance.screen[0] - inferred[0]
-        ey = instance.screen[1] - inferred[1]
-
-        # append to error list
-        self.errors.append((ex,ey))
-
-    def generate_cutout(self,image,instance,inferred):
-
-        # create cutout
-        cutout = np.zeros((self.params.cutout_size,self.params.cutout_size,3),np.float32)
-        half = int((self.params.cutout_size - 1) / 2)
-        for y in range(-half,half + 1):
-            cy = int(inferred[1] + y)
-            if (cy >= 0) and (cy < self.params.frame_height):
-                for x in range(-half,half + 1):
-                    cx = int(inferred[0] + x)
-                    if (cx >= 0) and (cx < self.params.frame_width):
-                        cutout[y + half,x + half] = image[cy,cx]
-        
-        # save cutout
-        cutout = np.multiply(cutout,255.0)
-        cutout = cutout.astype(np.uint8)
-        name = '{:05}.bmp'.format(self.generate_n)
-        cv2.imwrite(self.generate_path + name,cutout)
-
-        # and write a corresponding line in the csv
-        self.generate_writer.writerow([
-            name,
-            inferred[0],inferred[1],
-            instance.screen[0],instance.screen[1],
-            instance.ndc[0],instance.ndc[1],instance.ndc[2],
-            instance.head_pos[0],instance.head_pos[1],instance.head_pos[2],
-            instance.head_dir[0],instance.head_dir[1],
-            instance.light_dir[0],instance.light_dir[1],
-            instance.light_color[0],instance.light_color[1],instance.light_color[2],
-            instance.ambient_color[0],instance.ambient_color[1],instance.ambient_color[2],
-            instance.skin_color[0],instance.skin_color[1],instance.skin_color[2]
-        ])
-        self.generate_n += 1
-
-    def process_errors(self):
-
-        # get number of samples
-        total = len(self.errors)
-
-        # get number of parameters
-        n = len(self.errors[0])
-
-        # calculate averages
-        avg = []
-        for i in range(0,n):
-            avg.append(0.0)
-        for error in self.errors:
-            for i in range(0,n):
-                avg[i] += error[i]
-        for i in range(0,n):
-            avg[i] /= total
-
-        # calculate standard deviations
-        dif = []
-        for i in range(0,n):
-            dif.append(0.0)
-        for error in self.errors:
-            for i in range(0,n):
-                d = error[i] - avg[i]
-                dif[i] += d * d
-        almost_total = total - 1.0
-        for i in range(0,n):
-            dif[i] /= almost_total
-        stddev = []
-        for i in range(0,n):
-            stddev.append(math.sqrt(dif[i]))
-
-        # and show the results
-        print('statistics:')
-        print('    # of samples: {}'.format(total))
-        for i in range(0,n):
-            print('    {:>16}: {:>6.3f} +/- {:>6.3f}'.format(self.error_names[i],avg[i],stddev[i]))
+                print('    {} / {} not found'.format(i,len(dataset[0]) - 1))
 
 if __name__ == '__main__':
-    
-    # get parameters for this stage
     params = Params('./params.yaml')
 
-    # define names of the paths and files
     weights_name = './scan.h5'
 
     path0data = './data0/'
@@ -377,7 +233,6 @@ if __name__ == '__main__':
     path1test = './test1/'
     csv1test = './test1/files.csv'
     
-    # you need a command this time
     if len(sys.argv) < 2:
         print('usage:')
         print('')
@@ -390,53 +245,47 @@ if __name__ == '__main__':
         print('    generate    - generate new dataset from cutouts')
         exit(-1)
 
-    # train and train more
     if sys.argv[1] == 'train':
-        
-        # initialize training environment around ./data0/
-        training = ScanTraining(params,path0data,csv0data)
-
-        # either continue training or train from scratch
+        print('creating model...')
+        model = create(params.frame_width,params.frame_height,params.factor,params.scan_filters,params.scan_modules,params.scan_rate)
+        print('loading data0 dataset...')
+        dataset = load_dataset(params.frame_width,params.frame_height,params.factor,path0data,csv0data)
         if (len(sys.argv) > 2) and (sys.argv[2] == 'more'):
-            training.train_more(weights_name)
-        else:
-            training.train(weights_name)
+            print('loading old weights...')
+            model.load_weights(weights_name)
+        print('training...')
+        train(model,dataset,params.scan_epochs,params.scan_batch_size)
+        print('saving new weights...')
+        model.save_weights(weights_name)
 
-    # test
     elif sys.argv[1] == 'test':
+        print('creating model...')
+        model = create(params.frame_width,params.frame_height,params.factor,params.scan_filters,params.scan_modules,params.scan_rate)
+        print('loading weights...')
+        model.load_weights(weights_name)
+        print('loading test0 dataset...')
+        dataset = load_dataset(params.frame_width,params.frame_height,params.factor,path0test,csv0test)
+        print('measuring statistics...')
+        test(model,dataset,params.frame_width,params.frame_height,params.factor,params.threshold)
 
-        # initialize testing environment
-        testing = ScanTesting(params,weights_name)
-
-        # run test cycle on ./test0/, and show results
-        print('running test cycle for statistics...')
-        testing.run_test(path0test,csv0test,testing.collect_errors)
-        testing.process_errors()
-
-    # generate
     elif sys.argv[1] == 'generate':
-
-        # initialize testing environment
-        testing = ScanTesting(params,weights_name)
-
-        # run test cycle on ./data0/, and create cutouts in ./data1/
-        print('running test cycle to generate cutouts for {}...'.format(path1data))
+        print('creating model...')
+        model = create(params.frame_width,params.frame_height,params.factor,params.scan_filters,params.scan_modules,params.scan_rate)
+        print('loading weights...')
+        model.load_weights(weights_name)
+        print('loading data0 dataset...')
+        dataset = load_dataset(params.frame_width,params.frame_height,params.factor,path0data,csv0data)
         if os.path.exists(path1data):
             shutil.rmtree(path1data)
         os.mkdir(path1data)
-        with open(csv1data,'w',newline='') as file:
-            testing.generate_writer = csv.writer(file)
-            testing.generate_n = 0
-            testing.generate_path = path1data
-            testing.run_test(path0data,csv0data,testing.generate_cutout)
-
-        # run test cycle on ./test0/, and create cutouts in ./test1/
-        print('running test cycle to generate cutouts for {}...'.format(path1test))
+        print('generating cutouts...')
+        generate_cutouts(model,dataset,params.frame_width,params.frame_height,params.factor,params.threshold,params.cutout_size,path1data,csv1data)
+        print('loading test0 dataset...')
+        dataset = load_dataset(params.frame_width,params.frame_height,params.factor,path0test,csv0test)
         if os.path.exists(path1test):
             shutil.rmtree(path1test)
         os.mkdir(path1test)
-        with open(csv1test,'w',newline='') as file:
-            testing.generate_writer = csv.writer(file)
-            testing.generate_n = 0
-            testing.generate_path = path1test
-            testing.run_test(path0test,csv0test,testing.generate_cutout)
+        print('generating cutouts...')
+        generate_cutouts(model,dataset,params.frame_width,params.frame_height,params.factor,params.threshold,params.cutout_size,path1test,csv1test)
+
+    print('done.')

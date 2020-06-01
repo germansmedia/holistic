@@ -15,9 +15,11 @@ from PyQt5.QtGui import *
 from PyQt5.QtCore import *
 import tensorflow as tf
 from tensorflow.keras import Model
+import pyrealsense2 as rs
 from graphics import *
-from scan import *
-from pose import *
+import scan
+import pose
+from params import *
 
 TEST_IMAGE = False
 
@@ -78,7 +80,7 @@ class ViewerWidget(QWidget):
 
         painter.begin(self)
 
-        if self.holistic.application.input_image:
+        if self.holistic.application.input_image_rgb != None:
 
             # calculate uniform scale
             xscale = self.width() / self.holistic.application.params.frame_width
@@ -99,12 +101,12 @@ class ViewerWidget(QWidget):
             ypsize = ysize / self.holistic.application.params.frame_height
 
             # draw frame
-            painter.drawImage(QRect(xstart,ystart,xsize,ysize),self.holistic.application.input_image)
+            #painter.drawImage(QRect(xstart,ystart,xsize,ysize),self.holistic.application.input_image_rgb)
+            painter.drawImage(QRect(xstart,ystart,xsize,ysize),self.holistic.application.input_image_a)
 
-            if self.holistic.application.scan_image:
+            if self.holistic.application.scan_image != None:
 
                 # draw scan result cells
-                print('drawing cells {},{} ({}x{})'.format(xstart,ystart,xsize,ysize))
                 painter.setCompositionMode(QPainter.CompositionMode_Plus)
                 painter.drawImage(QRect(xstart,ystart,xsize,ysize),self.holistic.application.scan_image)
 
@@ -173,18 +175,23 @@ class Application(QApplication):
         self.lastWindowClosed.connect(self.quit)
 
         if not TEST_IMAGE:
-            self.camera = cv2.VideoCapture(0)
-            self.camera.set(cv2.CAP_PROP_FRAME_WIDTH,640)
-            self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT,480)
-            self.camera.set(cv2.CAP_PROP_FPS,60)
+            config = rs.config()
+            config.enable_stream(rs.stream.color,0,640,480,rs.format.bgr8,60)
+            config.enable_stream(rs.stream.depth,0,640,480,rs.format.z16,60)
+            self.pipe = rs.pipeline()
+            self.pipe.start(config)
+            self.align = rs.align(rs.stream.color)
 
-        self.input_image = None
+        self.input_image_rgb = None
+        self.input_image_depth = None
         self.scan_image = None
         self.pose_image = None
         self.face_params = None
 
-        self.scan_model = ScanModel(self.params,'scan.h5')
-        self.pose_model = PoseModel(self.params,'pose.h5')
+        self.scan_model = scan.create(self.params.frame_width,self.params.frame_height,self.params.factor,self.params.scan_filters,self.params.scan_modules,self.params.scan_rate)
+        self.scan_model.load_weights('scan.h5')
+        self.pose_model = pose.create(self.params.cutout_size,self.params.pose_filters,self.params.pose_rate)
+        self.pose_model.load_weights('pose.h5')
         self.holistic = Holistic(self)
         if not TEST_IMAGE:
             self.process_thread = threading.Thread(target=self.processThread,args=())
@@ -200,90 +207,42 @@ class Application(QApplication):
             self.stop_process = True
             self.process_thread.join()
 
-    def process(self,input_frame):
+    def process(self,input_frame_rgb,input_frame_a):
 
         # turn into QImage
-        bgr_version = cv2.cvtColor(input_frame,cv2.COLOR_RGB2BGR)
-        self.input_image = QImage(bgr_version.data,bgr_version.shape[1],bgr_version.shape[0],QImage.Format_RGB888)
+        bgr_version = cv2.cvtColor(input_frame_rgb,cv2.COLOR_RGB2BGR)
+        self.input_image_rgb = QImage(bgr_version.data,bgr_version.shape[1],bgr_version.shape[0],QImage.Format_RGB888)
+        self.input_image_a = QImage(input_frame_a.data,input_frame_a.shape[1],input_frame_a.shape[0],QImage.Format_Grayscale8)
 
         # run scan
-        scan_input = np.multiply(input_frame.astype(np.float32),1.0 / 255.0)
-        scan_output = self.scan_model.infer(scan_input)
-        scan_frame = cv2.cvtColor(np.multiply(scan_output,255.0).astype(np.uint8),cv2.COLOR_GRAY2RGBA)
+        combined = np.dstack((input_frame_rgb[:,:,0],input_frame_rgb[:,:,1],input_frame_rgb[:,:,2],input_frame_a))
+        scan_input = np.multiply(combined.astype(np.float32),1.0 / 255.0)
+        scan_output = scan.infer(self.scan_model,scan_input)
 
-        # clear green & blue channels, and set alpha
+        # turn into red QImage
+        scan_frame = cv2.cvtColor(scan.float2rgb(scan_output),cv2.COLOR_GRAY2RGBA)
         scan_frame[:,:,1] = 0
         scan_frame[:,:,2] = 0
         scan_frame[:,:,3] = 255
-
-        # turn into QImage
         self.scan_image = QImage(scan_frame.data,scan_frame.shape[1],scan_frame.shape[0],QImage.Format_RGBA8888)
 
-        # -- copied from scan.py (refactor into separate calls):
+        # find where the face is
+        result = scan.find(scan_input,scan_output,self.params.frame_width,self.params.frame_height,self.params.factor,self.params.threshold)
 
-        # width and height of scan_output
-        rwidth = int(math.floor(self.params.frame_width / self.params.factor))
-        rheight = int(math.floor(self.params.frame_height / self.params.factor))
-
-        # find the cell with the highest result
-        px = -1
-        py = -1
-        highest = 0.0
-        for y in range(0,rheight):
-            for x in range(0,rwidth):
-                if scan_output[y,x] > highest:
-                    highest = scan_output[y,x]
-                    px = x
-                    py = y
-
-        if highest > self.params.threshold:
-
-            # adjust subcell accuracy
-            if py > 0:
-                u = scan_output[py - 1,px]
-            else:
-                u = 0.0
-            if py < rheight - 1:
-                d = scan_output[py + 1,px]
-            else:
-                d = 0.0
-            if px > 0:
-                l = scan_output[py,px - 1]
-            else:
-                l = 0.0
-            if px < rwidth - 1:
-                r = scan_output[py,px + 1]
-            else:
-                r = 0.0
-            totalx = highest + l + r
-            totaly = highest + u + d
-            ax = (r - l) / totalx
-            ay = (d - u) / totaly
-
-            # add adjustment, and take center of the cell
-            px = int((px + 0.5 + ax) * self.params.factor)
-            py = int((py + 0.5 + ay) * self.params.factor)
+        if result != None:
 
             # create cutout
-            pose_input = np.zeros((self.params.cutout_size,self.params.cutout_size,3),np.float32)
-            half = int((self.params.cutout_size - 1) / 2)
-            for y in range(-half,half + 1):
-                cy = int(py + y)
-                if (cy >= 0) and (cy < self.params.frame_height):
-                    for x in range(-half,half + 1):
-                        cx = int(px + x)
-                        if (cx >= 0) and (cx < self.params.frame_width):
-                            pose_input[half + y,half + x] = scan_input[cy,cx]
+            pose_input = scan.generate_cutout(result[0],result[1],scan_input,self.params.frame_width,self.params.frame_height,self.params.cutout_size)
 
             # turn into QImage
             bgra_version = cv2.cvtColor(pose_input,cv2.COLOR_RGB2BGR)
             self.pose_image = QImage(bgra_version.data,bgra_version.shape[1],bgra_version.shape[0],QImage.Format_RGB888)
 
             # run pose
-            pose_output = self.pose_model.infer(pose_input)
+            pose_output = pose.infer(self.pose_model,pose_input)
                 
             # update the face parameter
-            self.face_params = (px,py,pose_output)
+            self.face_params = (result[0],result[1],pose_output)
 
         else:
             self.face_params = None
@@ -293,9 +252,15 @@ class Application(QApplication):
 
     def processThread(self):
         while not self.stop_process:
-            ret,input_frame = self.camera.read()
-            input_frame = cv2.resize(input_frame,(self.params.frame_width,self.params.frame_height))
-            self.process(input_frame)
+            frames = self.pipe.wait_for_frames()
+            frames = self.align.process(frames)
+            input_frame_rgb = np.asanyarray(frames.get_color_frame().data)
+            input_frame_a = np.asanyarray(frames.get_depth_frame().data)
+            #print('rgb shape = {}'.format(input_frame_rgb.shape))
+            input_frame_a = np.clip(np.divide(input_frame_a,32.0),0.0,255.0).astype(np.uint8)
+            input_frame_rgb = cv2.resize(input_frame_rgb,(self.params.frame_width,self.params.frame_height))
+            input_frame_a = cv2.resize(input_frame_a,(self.params.frame_width,self.params.frame_height))
+            self.process(input_frame_rgb,input_frame_a)
 
 if __name__ == '__main__':
 
