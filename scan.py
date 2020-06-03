@@ -21,8 +21,11 @@ def encoding(a,filters,modules):
 def reduction(a):
     return layers.MaxPooling2D((2,2))(a)
 
-def create(frame_width,frame_height,factor,filters,modules,rate):
-    inputs = layers.Input(shape=(frame_height,frame_width,4))
+def create(frame_width,frame_height,depth,factor,filters,modules,rate):
+    if depth:
+        inputs = layers.Input(shape=(frame_height,frame_width,4))
+    else:
+        inputs = layers.Input(shape=(frame_height,frame_width,3))
     a = encoding(inputs,filters,modules)
     cur = 1
     while cur < factor:
@@ -42,7 +45,7 @@ def create(frame_width,frame_height,factor,filters,modules,rate):
 def infer(model,inputs):
     return model.predict(tf.expand_dims(inputs,0),steps=1)[0]
 
-def load_dataset(frame_width,frame_height,factor,path,csv_name):
+def load_dataset(frame_width,frame_height,depth,factor,path,csv_name):
     rwidth = int(math.floor(frame_width / factor))
     rheight = int(math.floor(frame_height / factor))
     inputs = []
@@ -69,7 +72,10 @@ def load_dataset(frame_width,frame_height,factor,path,csv_name):
             r += 3
             skin_color = (float(row[r]),float(row[r + 1]),float(row[r + 2]))
             r += 3
-            image = np.multiply(cv2.imread(path + name,cv2.IMREAD_UNCHANGED).astype(np.float32),1.0 / 255.0)
+            if depth:
+                image = np.multiply(cv2.imread(path + name,cv2.IMREAD_UNCHANGED).astype(np.float32),1.0 / 255.0)
+            else:
+                image = np.multiply(cv2.imread(path + name).astype(np.float32),1.0 / 255.0)
             output = np.zeros((rheight,rwidth,1),dtype=np.float32)
             px = int(math.floor(screen[0] / factor))
             py = int(math.floor(screen[1] / factor))
@@ -172,7 +178,10 @@ def test(model,dataset,frame_width,frame_height,factor,threshold):
     for i in range(0,n):
         print('    {:>16}: {:>6.3f} +/- {:>6.3f}'.format(error_names[i],avg[i],stddev[i]))
 
-def rgb2float(image,image_depth):
+def rgb2float(image):
+    return np.multiply(image.astype(np.float32),1.0 / 255.0)
+
+def rgba2float(image,image_depth):
     r,g,b = image.split()
     rgba = cv2.merge(r,g,b,image_depth)
     return np.multiply(rgba.astype(np.float32),1.0 / 255.0)
@@ -180,8 +189,11 @@ def rgb2float(image,image_depth):
 def float2rgb(image):
     return np.multiply(image,255.0).astype(np.uint8)
 
-def generate_cutout(px,py,image,frame_width,frame_height,cutout_size):
-    cutout = np.zeros((cutout_size,cutout_size,4),np.float32)
+def generate_cutout(px,py,image,frame_width,frame_height,depth,cutout_size):
+    if depth:
+        cutout = np.zeros((cutout_size,cutout_size,4),np.float32)
+    else:
+        cutout = np.zeros((cutout_size,cutout_size,3),np.float32)
     half = int((cutout_size - 1) / 2)
     for y in range(-half,half + 1):
         cy = int(py + y)
@@ -192,7 +204,7 @@ def generate_cutout(px,py,image,frame_width,frame_height,cutout_size):
                     cutout[y + half,x + half] = image[cy,cx]
     return cutout
 
-def generate_cutouts(model,dataset,frame_width,frame_height,factor,threshold,cutout_size,path,csv_name):
+def generate_cutouts(model,dataset,frame_width,frame_height,depth,factor,threshold,cutout_size,path,csv_name):
     with open(csv_name,'w',newline='') as file:
         writer = csv.writer(file)
         for i in range(0,len(dataset[0])):
@@ -200,7 +212,7 @@ def generate_cutouts(model,dataset,frame_width,frame_height,factor,threshold,cut
             result = find(dataset[0][i],inference,frame_width,frame_height,factor,threshold)
             if result != None:
                 print('    {} / {}'.format(i,len(dataset[0]) - 1))
-                cutout = generate_cutout(result[0],result[1],dataset[0][i],frame_width,frame_height,cutout_size)
+                cutout = generate_cutout(result[0],result[1],dataset[0][i],frame_width,frame_height,depth,cutout_size)
                 name = '{:05}.png'.format(i)
                 cv2.imwrite(path + name,float2rgb(cutout))
                 writer.writerow([
@@ -247,9 +259,9 @@ if __name__ == '__main__':
 
     if sys.argv[1] == 'train':
         print('creating model...')
-        model = create(params.frame_width,params.frame_height,params.factor,params.scan_filters,params.scan_modules,params.scan_rate)
+        model = create(params.frame_width,params.frame_height,params.depth,params.factor,params.scan_filters,params.scan_modules,params.scan_rate)
         print('loading data0 dataset...')
-        dataset = load_dataset(params.frame_width,params.frame_height,params.factor,path0data,csv0data)
+        dataset = load_dataset(params.frame_width,params.frame_height,params.depth,params.factor,path0data,csv0data)
         if (len(sys.argv) > 2) and (sys.argv[2] == 'more'):
             print('loading old weights...')
             model.load_weights(weights_name)
@@ -260,32 +272,32 @@ if __name__ == '__main__':
 
     elif sys.argv[1] == 'test':
         print('creating model...')
-        model = create(params.frame_width,params.frame_height,params.factor,params.scan_filters,params.scan_modules,params.scan_rate)
+        model = create(params.frame_width,params.frame_height,params.depth,params.factor,params.scan_filters,params.scan_modules,params.scan_rate)
         print('loading weights...')
         model.load_weights(weights_name)
         print('loading test0 dataset...')
-        dataset = load_dataset(params.frame_width,params.frame_height,params.factor,path0test,csv0test)
+        dataset = load_dataset(params.frame_width,params.frame_height,params.depth,params.factor,path0test,csv0test)
         print('measuring statistics...')
         test(model,dataset,params.frame_width,params.frame_height,params.factor,params.threshold)
 
     elif sys.argv[1] == 'generate':
         print('creating model...')
-        model = create(params.frame_width,params.frame_height,params.factor,params.scan_filters,params.scan_modules,params.scan_rate)
+        model = create(params.frame_width,params.frame_height,params.depth,params.factor,params.scan_filters,params.scan_modules,params.scan_rate)
         print('loading weights...')
         model.load_weights(weights_name)
         print('loading data0 dataset...')
-        dataset = load_dataset(params.frame_width,params.frame_height,params.factor,path0data,csv0data)
+        dataset = load_dataset(params.frame_width,params.frame_height,params.depth,params.factor,path0data,csv0data)
         if os.path.exists(path1data):
             shutil.rmtree(path1data)
         os.mkdir(path1data)
         print('generating cutouts...')
-        generate_cutouts(model,dataset,params.frame_width,params.frame_height,params.factor,params.threshold,params.cutout_size,path1data,csv1data)
+        generate_cutouts(model,dataset,params.frame_width,params.frame_height,params.depth,params.factor,params.threshold,params.cutout_size,path1data,csv1data)
         print('loading test0 dataset...')
-        dataset = load_dataset(params.frame_width,params.frame_height,params.factor,path0test,csv0test)
+        dataset = load_dataset(params.frame_width,params.frame_height,params.depth,params.factor,path0test,csv0test)
         if os.path.exists(path1test):
             shutil.rmtree(path1test)
         os.mkdir(path1test)
         print('generating cutouts...')
-        generate_cutouts(model,dataset,params.frame_width,params.frame_height,params.factor,params.threshold,params.cutout_size,path1test,csv1test)
+        generate_cutouts(model,dataset,params.frame_width,params.frame_height,params.depth,params.factor,params.threshold,params.cutout_size,path1test,csv1test)
 
     print('done.')

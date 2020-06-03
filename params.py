@@ -12,6 +12,7 @@ class Params:
 
         self.frame_width = params['frame_width']
         self.frame_height = params['frame_height']
+        self.depth = params['depth']
         self.factor = params['factor']
         self.threshold = params['threshold']
         self.cutout_size = params['cutout_size']

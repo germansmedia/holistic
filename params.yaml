@@ -2,14 +2,17 @@
 frame_width: 256
 frame_height: 192
 
+# use depth channel
+depth: false
+
 # reduction factor frame->cell map
 factor: 16
 
 # threshold to accept a face
-threshold: 0.4
+threshold: 0.1
 
 # size of the face analysis cutouts
-cutout_size: 65
+cutout_size: 129
 
 # scan hyperparameters
 scan_filters: 64

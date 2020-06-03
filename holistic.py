@@ -101,8 +101,8 @@ class ViewerWidget(QWidget):
             ypsize = ysize / self.holistic.application.params.frame_height
 
             # draw frame
-            #painter.drawImage(QRect(xstart,ystart,xsize,ysize),self.holistic.application.input_image_rgb)
-            painter.drawImage(QRect(xstart,ystart,xsize,ysize),self.holistic.application.input_image_a)
+            painter.drawImage(QRect(xstart,ystart,xsize,ysize),self.holistic.application.input_image_rgb)
+            #painter.drawImage(QRect(xstart,ystart,xsize,ysize),self.holistic.application.input_image_a)
 
             if self.holistic.application.scan_image != None:
 
@@ -177,10 +177,12 @@ class Application(QApplication):
         if not TEST_IMAGE:
             config = rs.config()
             config.enable_stream(rs.stream.color,0,640,480,rs.format.bgr8,60)
-            config.enable_stream(rs.stream.depth,0,640,480,rs.format.z16,60)
+            if self.params.depth:
+                config.enable_stream(rs.stream.depth,0,640,480,rs.format.z16,60)
             self.pipe = rs.pipeline()
             self.pipe.start(config)
-            self.align = rs.align(rs.stream.color)
+            if self.params.depth:
+                self.align = rs.align(rs.stream.color)
 
         self.input_image_rgb = None
         self.input_image_depth = None
@@ -188,9 +190,9 @@ class Application(QApplication):
         self.pose_image = None
         self.face_params = None
 
-        self.scan_model = scan.create(self.params.frame_width,self.params.frame_height,self.params.factor,self.params.scan_filters,self.params.scan_modules,self.params.scan_rate)
+        self.scan_model = scan.create(self.params.frame_width,self.params.frame_height,self.params.depth,self.params.factor,self.params.scan_filters,self.params.scan_modules,self.params.scan_rate)
         self.scan_model.load_weights('scan.h5')
-        self.pose_model = pose.create(self.params.cutout_size,self.params.pose_filters,self.params.pose_rate)
+        self.pose_model = pose.create(self.params.cutout_size,self.params.depth,self.params.pose_filters,self.params.pose_rate)
         self.pose_model.load_weights('pose.h5')
         self.holistic = Holistic(self)
         if not TEST_IMAGE:
@@ -207,15 +209,22 @@ class Application(QApplication):
             self.stop_process = True
             self.process_thread.join()
 
-    def process(self,input_frame_rgb,input_frame_a):
+    def process(self,input_frames):
 
         # turn into QImage
-        bgr_version = cv2.cvtColor(input_frame_rgb,cv2.COLOR_RGB2BGR)
+        if self.params.depth:
+            bgr_version = cv2.cvtColor(input_frames[0],cv2.COLOR_RGB2BGR)
+        else:
+            bgr_version = cv2.cvtColor(input_frames,cv2.COLOR_RGB2BGR)
         self.input_image_rgb = QImage(bgr_version.data,bgr_version.shape[1],bgr_version.shape[0],QImage.Format_RGB888)
-        self.input_image_a = QImage(input_frame_a.data,input_frame_a.shape[1],input_frame_a.shape[0],QImage.Format_Grayscale8)
+        if self.params.depth:
+            self.input_image_a = QImage(input_frames[1].data,input_frames[1].shape[1],input_frames[1].shape[0],QImage.Format_Grayscale8)
 
         # run scan
-        combined = np.dstack((input_frame_rgb[:,:,0],input_frame_rgb[:,:,1],input_frame_rgb[:,:,2],input_frame_a))
+        if self.params.depth:
+            combined = np.dstack((input_frames[0][:,:,0],input_frames[0][:,:,1],input_frames[0][:,:,2],input_frames[1]))
+        else:
+            combined = input_frames
         scan_input = np.multiply(combined.astype(np.float32),1.0 / 255.0)
         scan_output = scan.infer(self.scan_model,scan_input)
 
@@ -232,7 +241,7 @@ class Application(QApplication):
         if result != None:
 
             # create cutout
-            pose_input = scan.generate_cutout(result[0],result[1],scan_input,self.params.frame_width,self.params.frame_height,self.params.cutout_size)
+            pose_input = scan.generate_cutout(result[0],result[1],scan_input,self.params.frame_width,self.params.frame_height,self.params.depth,self.params.cutout_size)
 
             # turn into QImage
             bgra_version = cv2.cvtColor(pose_input,cv2.COLOR_RGB2BGR)
@@ -253,14 +262,19 @@ class Application(QApplication):
     def processThread(self):
         while not self.stop_process:
             frames = self.pipe.wait_for_frames()
-            frames = self.align.process(frames)
-            input_frame_rgb = np.asanyarray(frames.get_color_frame().data)
-            input_frame_a = np.asanyarray(frames.get_depth_frame().data)
-            #print('rgb shape = {}'.format(input_frame_rgb.shape))
-            input_frame_a = np.clip(np.divide(input_frame_a,32.0),0.0,255.0).astype(np.uint8)
-            input_frame_rgb = cv2.resize(input_frame_rgb,(self.params.frame_width,self.params.frame_height))
-            input_frame_a = cv2.resize(input_frame_a,(self.params.frame_width,self.params.frame_height))
-            self.process(input_frame_rgb,input_frame_a)
+            if self.params.depth:
+                frames = self.align.process(frames)
+                input_frame_rgb = np.asanyarray(frames.get_color_frame().data)
+                input_frame_a = np.asanyarray(frames.get_depth_frame().data)
+                #print('rgb shape = {}'.format(input_frame_rgb.shape))
+                input_frame_a = np.clip(np.divide(input_frame_a,32.0),0.0,255.0).astype(np.uint8)
+                input_frame_rgb = cv2.resize(input_frame_rgb,(self.params.frame_width,self.params.frame_height))
+                input_frame_a = cv2.resize(input_frame_a,(self.params.frame_width,self.params.frame_height))
+                self.process((input_frame_rgb,input_frame_a))
+            else:
+                input_frame = np.asanyarray(frames.get_color_frame().data)
+                input_frame = cv2.resize(input_frame,(self.params.frame_width,self.params.frame_height))
+                self.process(input_frame)
 
 if __name__ == '__main__':
 

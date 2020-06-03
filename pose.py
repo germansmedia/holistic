@@ -17,25 +17,33 @@ def inception(inputs,filters):
     a = layers.Conv2D(filters,(1,1),activation='relu',padding='same')(inputs)
     b = layers.Conv2D(filters,(1,1),activation='relu',padding='same')(inputs)
     b = layers.Conv2D(filters,(3,3),activation='relu',padding='same')(b)
-    c = layers.Conv2D(filters,(1,1),activation='relu',padding='same')(inputs)
-    c = layers.Conv2D(filters,(3,3),activation='relu',padding='same')(c)
-    c = layers.Conv2D(filters,(3,3),activation='relu',padding='same')(c)
+    #c = layers.Conv2D(filters,(1,1),activation='relu',padding='same')(inputs)
+    #c = layers.Conv2D(filters,(3,3),activation='relu',padding='same')(c)
+    #c = layers.Conv2D(filters,(3,3),activation='relu',padding='same')(c)
     #d = layers.Conv2D(filters,(1,1),activation='relu',padding='same')(inputs)
     #d = layers.Conv2D(filters,(3,3),activation='relu',padding='same')(d)
     #d = layers.Conv2D(filters,(3,3),activation='relu',padding='same')(d)
     #d = layers.Conv2D(filters,(3,3),activation='relu',padding='same')(d)
-    e = layers.MaxPooling2D((3,3),strides=(1,1),padding='same')(inputs)
-    e = layers.Conv2D(filters,(1,1),activation='relu',padding='same')(e)
+    #e = layers.MaxPooling2D((3,3),strides=(1,1),padding='same')(inputs)
+    #e = layers.Conv2D(filters,(1,1),activation='relu',padding='same')(e)
     #return layers.Concatenate(axis=3)([a,b,c,d,e])
-    return layers.Concatenate(axis=3)([a,b,c,e])
+    #return layers.Concatenate(axis=3)([a,b,c,e])
+    return layers.Concatenate(axis=3)([a,b])
 
 def reduction(inputs,f):
     a = layers.Conv2D(f,(3,3),strides=(2,2),activation='relu')(inputs)
     return a
 
-def create(cutout_size,filters,rate):
-    inputs = layers.Input(shape=(cutout_size,cutout_size,4))
+def create(cutout_size,depth,filters,rate):
+    if depth:
+        inputs = layers.Input(shape=(cutout_size,cutout_size,4))
+    else:
+        inputs = layers.Input(shape=(cutout_size,cutout_size,3))
     a = inception(inputs,filters)
+    a = reduction(a,filters)
+    a = inception(a,filters)
+    a = reduction(a,filters)
+    a = inception(a,filters)
     a = reduction(a,filters)
     a = inception(a,filters)
     a = reduction(a,filters)
@@ -55,7 +63,7 @@ def create(cutout_size,filters,rate):
 def infer(model,inputs):
     return model.predict(tf.expand_dims(inputs,0),steps=1)[0]
 
-def load_dataset(path,csv_name):
+def load_dataset(depth,path,csv_name):
     inputs = []
     outputs = []
     instances = []
@@ -82,7 +90,10 @@ def load_dataset(path,csv_name):
             r += 3
             skin_color = (float(row[r]),float(row[r + 1]),float(row[r + 2]))
             r += 3
-            image = np.multiply(cv2.imread(path + name,cv2.IMREAD_UNCHANGED).astype(np.float32),1.0 / 255.0)
+            if depth:
+                image = np.multiply(cv2.imread(path + name,cv2.IMREAD_UNCHANGED).astype(np.float32),1.0 / 255.0)
+            else:
+                image = np.multiply(cv2.imread(path + name).astype(np.float32),1.0 / 255.0)
             inputs.append(image)
             dx = screen[0] - center[0]
             dy = screen[1] - center[1]
@@ -194,9 +205,9 @@ if __name__ == '__main__':
 
     if sys.argv[1] == 'train':
         print('creating model...')
-        model = create(params.cutout_size,params.pose_filters,params.pose_rate)
+        model = create(params.cutout_size,params.depth,params.pose_filters,params.pose_rate)
         print('loading data1 dataset...')
-        dataset = load_dataset(path1data,csv1data)
+        dataset = load_dataset(params.depth,path1data,csv1data)
         if (len(sys.argv) > 2) and (sys.argv[2] == 'more'):
             print('loading old weights...')
             model.load_weights(weights_name)
@@ -207,10 +218,10 @@ if __name__ == '__main__':
 
     elif sys.argv[1] == 'test':
         print('creating model...')
-        model = create(params.cutout_size,params.pose_filters,params.pose_rate)
+        model = create(params.cutout_size,params.depth,params.pose_filters,params.pose_rate)
         print('loading weights...')
         model.load_weights(weights_name)
         print('loading test0 dataset...')
-        dataset = load_dataset(path1test,csv1test)
+        dataset = load_dataset(params.depth,path1test,csv1test)
         print('measuring statistics...')
         test(model,dataset,params.frame_width,params.frame_height,params.cutout_size)

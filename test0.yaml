@@ -2,7 +2,7 @@ data0:
   path: replace ./test0/
   csv: ./test0/files.csv
   count: 256
-  style: still_depth 1.0,0
+  style: still
   format: bmp
   size: 256,192
   projection: perspective 30,4/3,0.1,100
